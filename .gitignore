@@ -1,9 +1,5 @@
 # Chrome installation files
-chrome/profile/
-chrome/bin/
-chrome/*.exe
-chromedriver*
-chrome/*
+content*/
 
 
 # Byte-compiled / optimized / DLL files
