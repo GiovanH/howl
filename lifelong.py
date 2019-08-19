@@ -1,18 +1,21 @@
 import requests
+
 from bs4 import BeautifulSoup as bs4
 from urllib.parse import urljoin
 # from urllib.request import urlretrieve
 from pprint import pprint
 # from os import path, makedirs
-import jfileutil
-import progressbar
 import json
-import re
 import os
+import progressbar
+import re
 import selenium_login
 
+from snip import jfileutil
+
 import pandas as pd
-import nest
+
+from snip import nest
 
 import traceback
 
@@ -21,9 +24,13 @@ import traceback
 
 import asyncio
 
-from snip import crawlApi, std_redirected, easySlug
+import snip.data
 
-content_base = "content3"
+from snip.data import crawlApi
+from snip.filesystem import easySlug
+from snip.stream import std_redirected
+
+content_base = "content"
 
 
 # def makeExtension(req):
@@ -219,6 +226,18 @@ async def iterateContent(course, contentsid, parent):
     # print(contentsid, "end")
 
 
+async def saveCourseMetadata(courseId, courseName):
+
+    course_user_data = getApiResults(f"https://elearning.utdallas.edu/learn/api/public/v1/courses/{courseId}/users")
+
+    userids = [u.get("userId") for u in course_user_data]
+    users = [getApiResults(f"https://elearning.utdallas.edu/learn/api/public/v1/users/{userId}") for userId in userids]
+
+    rootdir = content_base + "/" + easySlug(courseName, directory=True)
+    os.makedirs(rootdir, exist_ok=True)
+    snip.data.writeJsonToCsv(users, os.path.join(rootdir, "users"))
+    
+
 async def saveGrades(courseId, courseName):
     global myGrades
     global columnsFrame
@@ -256,7 +275,12 @@ async def saveGrades(courseId, courseName):
 async def saveAnnouncements(courseId, courseName):
     url = "https://elearning.utdallas.edu/webapps/blackboard/execute/announcement?method=search&course_id=" + courseId
     req, soup = fetch(url)
-    announcements = soup.find("ul", id="announcementList").findAll("li")
+    
+    try:
+        announcements = soup.find("ul", id="announcementList").findAll("li")
+    except AttributeError:
+        print("No announcements.")
+        return
 
     rootdir2 = os.path.join(content_base, easySlug(courseName, directory=True), "announcementList")
     os.makedirs(rootdir2, exist_ok=True)
@@ -290,6 +314,11 @@ async def iterateCourses():
         if course['name'].find("F19") < 0:
             continue
         print("COURSE:", course['name'])
+
+        try:
+            await saveCourseMetadata(course['id'], course['name'])
+        except AttributeError:
+            traceback.print_exc()
 
         try:
             await saveGrades(course['id'], course['name'])
@@ -326,14 +355,14 @@ history = list()
 
 
 async def main():
-
     await iterateCourses()
 
 
-loop = asyncio.get_event_loop()
-tasks = [  
-    main(),
-]
-loop.run_until_complete(asyncio.wait(tasks))  
+if __name__ == "__main__" and not os.isatty(0):
+    loop = asyncio.get_event_loop()
+    tasks = [  
+        main(),
+    ]
+    loop.run_until_complete(asyncio.wait(tasks))  
 
 # loop.close()
