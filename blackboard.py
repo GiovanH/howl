@@ -60,8 +60,8 @@ class Cms():
 
     def fetch(self, url, soup=False):
         target_url = urljoin(self.urlbase, url)
-        req = self.session.get(target_url, cookies=self.cookies)
         # print(target_url)
+        req = self.session.get(target_url, cookies=self.cookies)
         if soup:
             soup = bs4(req.text, features="html.parser")
             return (req, soup)
@@ -86,46 +86,46 @@ class Cms():
     def getUser(self, netid):
         return self.fetch("/learn/api/public/v1/users?userName=" + netid).json()['results'][0]
 
-    def saveGrades(self):
-        raise NotImplementedError()
-
     def dumpAllUsers(self):
-        users = self.cms.getApiResults("/learn/api/public/v1/users?limit=100")
+        users = self.getApiResults("/learn/api/public/v1/users?limit=100")
         snip.data.writeJsonToCsv(
-            [{k: v for k, v in snip.data.Nest(u).flatten()} for u in users],
+            [{k: v for k, v in snip.nest.Nest(u).flatten()} for u in users],
             "allusers.csv"
         )
 
-    def saveAllClasses(self):
+    def allCourses(self):
         me = self.getUser(self.netid)
-        myCourses = self.getApiResults(f"/learn/api/public/v1/users/{me['id']}/courses?sort=lastAccessed")
-        for course in progressbar.progressbar(sorted(myCourses, key=lambda c: str(c.get("lastAccessed")))):
-            course = Course(self, course['courseId'])
+        __myCourses = self.getApiResults(f"/learn/api/public/v1/users/{me['id']}/courses?sort=lastAccessed")
+        _myCourses = [Course(self, course['courseId']) for course in __myCourses]
+        myCourses = [course for course in _myCourses if course.good]
 
-            if not course.good:
-                continue
+        return myCourses
 
-            print(course.name)
-
-            print("Save users")
-            try:
-                self.loop.run_until_complete(course.saveUsers())
-            except AttributeError:
-                traceback.print_exc()
+    def saveAllClasses(self):
+        with tqdm.tqdm(self.allCourses(), unit="courses") as progbar:
+            for course in progbar:
                 
-            print("Save announcements")
-            try:
-                self.loop.run_until_complete(course.saveAnnouncements())
-            except AttributeError:
-                traceback.print_exc()
+                progbar.set_description(course.name)
 
-            # Save contents
-                
-            print("Save contents")
-            try:
-                self.loop.run_until_complete(course.saveContents())
-            except AttributeError:
-                traceback.print_exc()
+                try:
+                    self.loop.run_until_complete(course.saveUsers())
+                except AttributeError:
+                    traceback.print_exc()
+                    
+                try:
+                    self.loop.run_until_complete(course.saveAnnouncements())
+                except AttributeError:
+                    traceback.print_exc()
+
+                # Save contents
+                    
+                try:
+                    self.loop.run_until_complete(course.saveContents())
+                except AttributeError:
+                    traceback.print_exc()
+
+                # Save grades
+                course.saveGrades()
 
             # return
 
@@ -159,22 +159,59 @@ class Course():
 
     async def saveUsers(self):
 
+        csvpath = os.path.join(self.rootdir, "users.csv")
+        if os.path.isfile(csvpath):
+            return
+        else:
+            print(csvpath)
+
         # Save user data
         v1_courses_users = self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/users")
 
         userids = [u.get("userId") for u in v1_courses_users]
-        users = [self.cms.getApiResults(f"/learn/api/public/v1/users/{userId}") for userId in userids]
 
-        snip.data.writeJsonToCsv(users, os.path.join(self.rootdir, "users"))
+        users = []
+        for userId in tqdm.tqdm(userids, "Users", unit="users"):
+            users.append(self.cms.getApiResults(f"/learn/api/public/v1/users/{userId}"))
+
+        snip.data.writeJsonToCsv(users, csvpath, ext=False)
+
+    def saveGrades(self):
+        import pandas as pd
+        me = self.cms.getUser(self.cms.netid)
+
+        columns = self.cms.getApiResults(f"/learn/api/public/v2/courses/{self.id}/gradebook/columns")
+        myGrades = self.cms.getApiResults(f"/learn/api/public/v2/courses/{self.id}/gradebook/users/{me['id']}")
+
+        grades_rootdir = os.path.join(self.rootdir, "gradebook")
+        os.makedirs(grades_rootdir, exist_ok=True)
+
+        myGradesFrame = pd.DataFrame([{a: b for a, b in snip.nest.Nest(k).flatten()} for k in myGrades])
+        columnsFrame = pd.DataFrame([{a: b for a, b in snip.nest.Nest(k).flatten()} for k in columns])
+
+        mergedGradeData = pd.merge(myGradesFrame, columnsFrame, left_on='columnId', right_on='id')
+        mergedGradeData.to_csv(os.path.join(grades_rootdir, snip.filesystem.easySlug(self.name) + ".csv"), sep=',')
 
     async def saveAnnouncements(self):
+
+        # v1_courses_announcements = self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/announcements")
+        
+        # pprint(v1_courses_announcements)
+
+        # announcements_root = os.path.join(self.rootdir, "announcementList")
+
+        # for a in v1_courses_announcements:
+        #     filename = f"{a.get('created')} - {snip.filesystem.easya(a.get('title'))}.html"
+        #     with open(os.path.join(announcements_root, filename), "w", encoding="utf-8") as document:
+        #         document.write(a.get('body'))
+
         url = "/webapps/blackboard/execute/announcement?method=search&course_id=" + self.id
         req, soup = self.cms.fetch(url, soup=True)
 
         try:
             announcements = soup.find("ul", id="announcementList").findAll("li")
         except AttributeError:
-            print("No announcements.")
+            # print("No announcements.")
             return
 
         announcement_dir = os.path.join(self.rootdir, "announcementList")
@@ -186,9 +223,10 @@ class Course():
                     title = re.sub("^\W*", "", a.find("h3").text)
                 except AttributeError:
                     title = re.sub("^\W*", "", next(a.children).text)
-                print("ANNOUNCEMENT:", title)
-                thisroot = announcement_dir + "/" + snip.filesystem.easySlug(title)
-                with open(thisroot + " - " + hex(hash(a)) + ".html", "w", encoding="utf-8") as document:
+                announcement_id = a.get("id")
+                # print("ANNOUNCEMENT:", title)
+                filepath = os.path.join(announcement_dir, f"{announcement_id} - {snip.filesystem.easySlug(title)}.html")
+                with open(filepath, "w", encoding="utf-8") as document:
                     document.write(a.prettify())
             except Exception:
                 print(a.prettify())
@@ -197,10 +235,14 @@ class Course():
 
     async def saveContents(self):
         self.history = []
-        for contents in self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents"):
-            await self._savecontent(contents['id'], self.rootdir)
+        os.makedirs("./handlers/", exist_ok=True)
+        with tqdm.tqdm(total=0, unit="files") as progbar:
+            for contents in self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents"):
+                await self._savecontent(contents['id'], self.rootdir, progbar)
 
-    async def _savecontent(self, contentsId, _rootdir):
+    async def _savecontent(self, contentsId, _rootdir, progbar):
+        progbar.total += 1
+        progbar.update(0)
         # Metadata identification
         try:
             cdata = self.cms.fetch(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}").json()
@@ -209,43 +251,59 @@ class Course():
             raise
 
         if cdata.get("status") and cdata.get("status") >= 400:
+            progbar.total -= 1
+            progbar.update(0)
             return
 
         # Loop detection
         uuid = (contentsId, cdata.get("title"))
         if uuid in self.history:
-            print("LOOP!", contentsId, "in", _rootdir)
+            progbar.write(f"LOOP! {contentsId} in {_rootdir}")
             # pprint(cdata)
+            progbar.total -= 1
+            progbar.update(0)
             return
         else:
             self.history.append(uuid)
 
         try:
-            print("CONTENT:", cdata.get("title"), cdata["contentHandler"].get("id"))
+            # progbar.write(f"CONTENT: {cdata.get('title')} {cdata['contentHandler'].get('id')}")
             contentHandler = cdata["contentHandler"].get("id")
         except KeyError:
             pprint(cdata)
+            progbar.total -= 1
+            progbar.update(0)
             return
 
-        thisroot = _rootdir + "/" + snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId
+        basepath = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
 
         # Content handling
 
         htmltypes = [
             "resource/x-bb-document",
             "resource/x-bb-blankpage",
-            "resource/x-bb-video"
+            "resource/x-bb-video",
+            "resource/x-bb-assignment"
         ]
 
         singleFields = {
             "resource/x-bb-externallink": "url",
-            "resource/x-bb-achievement": "title"
+            "resource/x-bb-achievement": "title",
+            # "resource/x-bb-asmt-test-link"
         }
 
-        if contentHandler in [None, "resource/x-bb-file", "resource/x-bb-folder"]:
+        with std_redirected("./handlers/" + snip.filesystem.easySlug(contentHandler) + ".txt"):
+            crawlApi(cdata)
+
+        if contentHandler in [None, "resource/x-bb-file"]:
             pass
+
+        elif contentHandler == "resource/x-bb-folder":
+            os.makedirs(os.path.join(basepath), exist_ok=True)
+            json.dump(cdata, open(os.path.join(basepath, "folderinfo.json"), "w"))
+
         elif contentHandler in htmltypes:
-            with open(thisroot + ".html", "w", encoding="utf-8") as document:
+            with open(basepath + ".html", "w", encoding="utf-8") as document:
                 document.write("<body>")
                 document.write("<h2>{}</h2>\n".format(cdata.get('title')))
                 document.write(cdata.get('body', "<No content.>"))
@@ -255,7 +313,7 @@ class Course():
         # Single-value items, like links and achievements.
         elif contentHandler in singleFields.keys():
             try:
-                with open(thisroot + ".txt", "w", encoding="utf-8") as document:
+                with open(basepath + ".txt", "w", encoding="utf-8") as document:
                     field = singleFields[contentHandler]
                     document.write(cdata["contentHandler"].get(field))
             except TypeError:
@@ -263,12 +321,11 @@ class Course():
                 pprint(cdata["contentHandler"])
 
         elif contentHandler == "resource/x-bb-courselink":
-            self._savecontent(cdata["contentHandler"].get("targetId"), _rootdir)
+            self._savecontent(cdata["contentHandler"].get("targetId"), _rootdir, progbar)
 
         else:
-            with std_redirected("./" + snip.filesystem.easySlug(contentHandler) + ".txt"):
-                crawlApi(cdata)
-            json.dump(cdata, open(thisroot + ".json", "w"))
+            progbar.write(f"Unknown content type {contentHandler}")
+            json.dump(cdata, open(basepath + ".json", "w"))
 
         # Attachment handling
 
@@ -280,19 +337,19 @@ class Course():
 
         if cdata.get("hasChildren") is True:
             children = self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}/children")
-            for child in children:
-                rootdir = _rootdir + "/" + snip.filesystem.easySlug(cdata['title'], directory=True)
-                # print("make", rootdir)
+            for child in children:                
+                rootdir = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
                 os.makedirs(rootdir, exist_ok=True)
-                await self._savecontent(child['id'], rootdir)
+                await self._savecontent(child['id'], rootdir, progbar)
                 # iterateContent(course, child['id'], rootdir)
 
+        progbar.update(1)
         # print(contentsid, "end")
 
     async def downloadAttachment(self, attachment, contentsid, parent):
         filename = attachment.get("fileName")
-        if not os.path.exists(parent + "/" + filename):
-            print("A:", parent + "/" + filename)
+        if not os.path.exists(os.path.join(parent, filename)):
+            # print("A:", parent + "/" + filename)
             request = self.cms.fetch(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsid}/attachments/" + attachment.get("id") + "/download", soup=False)
             with open(parent + "/" + filename, 'wb') as fd:
                 for chunk in request.iter_content(chunk_size=128):

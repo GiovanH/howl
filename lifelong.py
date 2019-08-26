@@ -2,7 +2,6 @@ import requests
 
 import os
 
-import pandas as pd
 
 from snip import nest
 
