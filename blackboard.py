@@ -13,8 +13,12 @@ from snip.data import crawlApi
 from snip.stream import std_redirected
 from snip import jfileutil
 import selenium_login
-import progressbar
+
+import tqdm
+
 import snip.data
+import snip.pwidgets
+import snip.nest
 import asyncio
 
 
