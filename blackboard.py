@@ -322,15 +322,31 @@ class Course():
             with open(basepath + ".txt", "w", encoding="utf-8") as document:
                 field = singleFields[contentHandler]
                 document.write(cdata["contentHandler"].get(field))
-            if re.match("https://docs.google.com/document/", url):
-                (docid,) = re.match("https://docs.google.com/document/d/([^/]+)", url).groups()
-                for format in ["pdf", "docx"]:
-                    dl_url = f"https://docs.google.com/document/export?format={format}&id={docid}"
+
+            if re.match("https://docs.google.com/", url):
+                # Google document
+
+                gtypes = {
+                    "document": ["pdf", "docx"],
+                    "spreadsheets": ["xlsx"]
+                }
+
+                (gtype, docid,) = re.match("https://docs.google.com/([^/]+)/d/([^/]+)", url).groups()
+                for format in gtypes.get(gtype, ["pdf"]):
+                    dl_url = f"https://docs.google.com/{gtype}/export?format={format}&id={docid}"
                     snip.net.saveStreamAs(snip.net.getStream(dl_url), f"{basepath}.{format}")
+
+            elif re.match("https://([A-Za-z0-9_-]+\.){0,1}box.com", url):
+                # Box
+                pass
+
+            else:
+                stream = snip.net.getStream(url)
+                snip.net.saveStreamAs(stream, basepath + snip.net.guessExtension(stream))
 
         elif contentHandler == "resource/x-bb-folder":
             os.makedirs(os.path.join(basepath), exist_ok=True)
-            json.dump(cdata, open(os.path.join(basepath, "folderinfo.json"), "w"))
+            json.dump(cdata, open(os.path.join(basepath, "folderinfo.json"), "w"), indent=4)
 
         elif contentHandler in htmltypes:
             with open(basepath + ".html", "w", encoding="utf-8") as document:
