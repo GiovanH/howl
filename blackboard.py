@@ -16,6 +16,7 @@ import selenium_login
 
 import tqdm
 
+import snip.net
 import snip.data
 import snip.pwidgets
 import snip.nest
@@ -238,9 +239,9 @@ class Course():
         os.makedirs("./handlers/", exist_ok=True)
         with tqdm.tqdm(total=0, unit="files") as progbar:
             for contents in self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents"):
-                await self._savecontent(contents['id'], self.rootdir, progbar)
+                await self._savecontents(contents['id'], self.rootdir, progbar)
 
-    async def _savecontent(self, contentsId, _rootdir, progbar):
+    async def _savecontents(self, contentsId, _rootdir, progbar):
         progbar.total += 1
         progbar.update(0)
         # Metadata identification
@@ -268,16 +269,34 @@ class Course():
 
         try:
             # progbar.write(f"CONTENT: {cdata.get('title')} {cdata['contentHandler'].get('id')}")
-            contentHandler = cdata["contentHandler"].get("id")
-        except KeyError:
+            assert cdata["contentHandler"].get("id")
+        except AssertionError:
             pprint(cdata)
             progbar.total -= 1
             progbar.update(0)
             return
 
-        basepath = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
-
         # Content handling
+
+        await self.saveContentHandler(progbar, contentsId, cdata, _rootdir)
+
+        # Recursion
+
+        if cdata.get("hasChildren") is True:
+            children = self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}/children")
+            for child in children:                
+                rootdir = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
+                os.makedirs(rootdir, exist_ok=True)
+                await self._savecontents(child['id'], rootdir, progbar)
+                # iterateContent(course, child['id'], rootdir)
+
+        progbar.update(1)
+        # print(contentsid, "end")
+
+    async def saveContentHandler(self, progbar, contentsId, cdata, _rootdir):
+
+        contentHandler = cdata["contentHandler"].get("id")
+        basepath = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
 
         htmltypes = [
             "resource/x-bb-document",
@@ -297,6 +316,17 @@ class Course():
 
         if contentHandler in [None, "resource/x-bb-file"]:
             pass
+
+        elif contentHandler == "resource/x-bb-externallink":
+            url = cdata["contentHandler"].get("url")
+            with open(basepath + ".txt", "w", encoding="utf-8") as document:
+                field = singleFields[contentHandler]
+                document.write(cdata["contentHandler"].get(field))
+            if re.match("https://docs.google.com/document/", url):
+                (docid,) = re.match("https://docs.google.com/document/d/([^/]+)", url).groups()
+                for format in ["pdf", "docx"]:
+                    dl_url = f"https://docs.google.com/document/export?format={format}&id={docid}"
+                    snip.net.saveStreamAs(snip.net.getStream(dl_url), f"{basepath}.{format}")
 
         elif contentHandler == "resource/x-bb-folder":
             os.makedirs(os.path.join(basepath), exist_ok=True)
@@ -321,7 +351,7 @@ class Course():
                 pprint(cdata["contentHandler"])
 
         elif contentHandler == "resource/x-bb-courselink":
-            self._savecontent(cdata["contentHandler"].get("targetId"), _rootdir, progbar)
+            self._savecontents(cdata["contentHandler"].get("targetId"), _rootdir, progbar)
 
         else:
             progbar.write(f"Unknown content type {contentHandler}")
@@ -333,24 +363,12 @@ class Course():
             # spool.enqueue(downloadAttachment, (attachment, course, contentsid, parent,))
             await self.downloadAttachment(attachment, contentsId, _rootdir)
 
-        # Recursion
-
-        if cdata.get("hasChildren") is True:
-            children = self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}/children")
-            for child in children:                
-                rootdir = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
-                os.makedirs(rootdir, exist_ok=True)
-                await self._savecontent(child['id'], rootdir, progbar)
-                # iterateContent(course, child['id'], rootdir)
-
-        progbar.update(1)
-        # print(contentsid, "end")
-
     async def downloadAttachment(self, attachment, contentsid, parent):
         filename = attachment.get("fileName")
         if not os.path.exists(os.path.join(parent, filename)):
             # print("A:", parent + "/" + filename)
             request = self.cms.fetch(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsid}/attachments/" + attachment.get("id") + "/download", soup=False)
-            with open(parent + "/" + filename, 'wb') as fd:
-                for chunk in request.iter_content(chunk_size=128):
-                    fd.write(chunk)
+            snip.net.saveStreamAs(request, os.path.join(parent, filename))
+            # with open(parent + "/" + filename, 'wb') as fd:
+            #     for chunk in request.iter_content(chunk_size=128):
+            #         fd.write(chunk)
