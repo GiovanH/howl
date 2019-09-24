@@ -1,9 +1,9 @@
 import blackboard
 
+cms = blackboard.Cms("https://elearning.utdallas.edu/", "stg160130")
 
 if __name__ == "__main__":
-    cms = blackboard.Cms("https://elearning.utdallas.edu/", "stg160130")
-    # cms.saveGrades()
+   # cms.saveGrades()
     cms.saveAllClasses()
 
 

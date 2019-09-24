@@ -88,10 +88,11 @@ class Cms():
         return self.fetch("/learn/api/public/v1/users?userName=" + netid).json()['results'][0]
 
     def dumpAllUsers(self):
+        import datetime
         users = self.getApiResults("/learn/api/public/v1/users?limit=100")
         snip.data.writeJsonToCsv(
             [{k: v for k, v in snip.nest.Nest(u).flatten()} for u in users],
-            "allusers.csv"
+            snip.filesystem.easySlug(f"allusers {str(datetime.datetime.now())}")
         )
 
     def allCourses(self):
@@ -314,8 +315,39 @@ class Course():
         with std_redirected("./handlers/" + snip.filesystem.easySlug(contentHandler) + ".txt"):
             crawlApi(cdata)
 
+        # Attachment handling
+
+        for attachment in self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}/attachments"):
+            # spool.enqueue(downloadAttachment, (attachment, course, contentsid, parent,))
+            await self.downloadAttachment(attachment, contentsId, _rootdir)
+
         if contentHandler in [None, "resource/x-bb-file"]:
             pass
+
+        elif contentHandler == "resource/x-bb-forumlink":
+            forum_id = cdata["contentHandler"].get("discussionId")
+            listview_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/forum?action=list_threads&course_id={self.id}&nav=discussion_board&conf_id=_266239_1&forum_id={forum_id}&forum_view=list"
+            (req, listview_soup) = self.cms.fetch(listview_url, soup=True)
+            table = listview_soup.find("table", id="listContainer_datatable")
+            if not table:
+                print("No table at url", listview_url)
+                return
+            for checkbox in table.findAll("input", type="checkbox", id=re.compile("[^(listContainer_selectAll)]")):
+                thread_id = f"_{checkbox.get('value')}_1"
+                tree_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/message?action=message_tree&course_id={self.id}&forum_id={forum_id}&message_id={thread_id}&nav=discussion_board&thread_id={thread_id}"
+                (req, threadtree_soup) = self.cms.fetch(tree_url, soup=True)
+                thread_name = False
+                for message_div in threadtree_soup.findAll("div", id=re.compile("^_[0-9]+_[0-9]")):
+                    message_id = message_div['id']
+                    subject = message_div.find(id=re.compile("subject_")).text
+                    author = message_div.find("span", class_="profileCardAvatarThumb").text.strip()
+                    message_name = snip.filesystem.easySlug(f"[{author}] {subject}")
+                    if not thread_name:
+                        thread_name = message_name
+                        os.makedirs(os.path.join(basepath, thread_name), exist_ok=True)
+                    message_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/message?action=message_frame&course_id={self.id}&forum_id={forum_id}&nav=db_thread_list&nav=discussion_board&message_id={message_id}"
+                    stream = self.cms.fetch(message_url)
+                    snip.net.saveStreamAs(stream, os.path.join(basepath, thread_name, message_name + ".html"))
 
         elif contentHandler == "resource/x-bb-externallink":
             url = cdata["contentHandler"].get("url")
@@ -372,12 +404,6 @@ class Course():
         else:
             progbar.write(f"Unknown content type {contentHandler}")
             json.dump(cdata, open(basepath + ".json", "w"))
-
-        # Attachment handling
-
-        for attachment in self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}/attachments"):
-            # spool.enqueue(downloadAttachment, (attachment, course, contentsid, parent,))
-            await self.downloadAttachment(attachment, contentsId, _rootdir)
 
     async def downloadAttachment(self, attachment, contentsid, parent):
         filename = attachment.get("fileName")
