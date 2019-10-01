@@ -23,6 +23,7 @@ import snip.pwidgets
 import snip.nest
 import asyncio
 
+from snip.filesystem import easySlug
 
 class Cms():
 
@@ -94,7 +95,7 @@ class Cms():
         users = self.getApiResults("/learn/api/public/v1/users?limit=100")
         snip.data.writeJsonToCsv(
             [{k: v for k, v in snip.nest.Nest(u).flatten()} for u in users],
-            snip.filesystem.easySlug(f"allusers {str(datetime.datetime.now())}")
+            easySlug(f"allusers {str(datetime.datetime.now())}")
         )
 
     def allCourses(self):
@@ -158,7 +159,7 @@ class Course():
 
         self.name = self.v1_courses['name']
 
-        self.rootdir = os.path.join("content", snip.filesystem.easySlug(self.name, directory=True))
+        self.rootdir = os.path.join("content", easySlug(self.name, directory=True))
         os.makedirs(self.rootdir, exist_ok=True)
 
     async def saveUsers(self):
@@ -194,14 +195,14 @@ class Course():
         columnsFrame = pd.DataFrame([{a: b for a, b in snip.nest.Nest(k).flatten()} for k in columns])
 
         mergedGradeData = pd.merge(myGradesFrame, columnsFrame, left_on='columnId', right_on='id')
-        mergedGradeData.to_csv(os.path.join(grades_rootdir, snip.filesystem.easySlug(self.name) + ".csv"), sep=',')
+        mergedGradeData.to_csv(os.path.join(grades_rootdir, easySlug(self.name) + ".csv"), sep=',')
 
         stream = self.cms.fetch(f"/webapps/bb-mygrades-BBLEARN/myGrades?course_id={self.id}&stream_name=mygrades").text
         for jsmatch in re.findall("showInLightBox\((.+' +)\)", stream):
             jsargs = re.sub("(' $)|(^ ')|(', ')", "\5", jsmatch).split("\5")
             if len(jsargs) == 5:
                 __, aname, feedback, cmd, __ = jsargs
-                with open(f"{grades_rootdir}/{aname}_{cmd}.html", "w", encoding="utf-8") as fp:
+                with open(f"{grades_rootdir}/{easySlug(aname)}_{cmd}.html", "w", encoding="utf-8") as fp:
                     unescaped_feedback = decode(encode(feedback, 'latin-1', 'backslashreplace'), 'unicode-escape')
                     fp.write(unescaped_feedback)
             # else:
@@ -240,7 +241,7 @@ class Course():
                     title = re.sub("^\W*", "", next(a.children).text)
                 announcement_id = a.get("id")
                 # print("ANNOUNCEMENT:", title)
-                filepath = os.path.join(announcement_dir, f"{announcement_id} - {snip.filesystem.easySlug(title)}.html")
+                filepath = os.path.join(announcement_dir, f"{announcement_id} - {easySlug(title)}.html")
                 with open(filepath, "w", encoding="utf-8") as document:
                     document.write(a.prettify())
             except Exception:
@@ -299,7 +300,7 @@ class Course():
         if cdata.get("hasChildren") is True:
             children = self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents/{contentsId}/children")
             for child in children:                
-                rootdir = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
+                rootdir = os.path.join(_rootdir, easySlug(cdata['title'], directory=True) + " - " + contentsId)
                 os.makedirs(rootdir, exist_ok=True)
                 await self._savecontents(child['id'], rootdir, progbar)
                 # iterateContent(course, child['id'], rootdir)
@@ -310,7 +311,7 @@ class Course():
     async def saveContentHandler(self, progbar, contentsId, cdata, _rootdir):
 
         contentHandler = cdata["contentHandler"].get("id")
-        basepath = os.path.join(_rootdir, snip.filesystem.easySlug(cdata['title'], directory=True) + " - " + contentsId)
+        basepath = os.path.join(_rootdir, easySlug(cdata['title'], directory=True) + " - " + contentsId)
 
         htmltypes = [
             "resource/x-bb-document",
@@ -325,7 +326,7 @@ class Course():
             # "resource/x-bb-asmt-test-link"
         }
 
-        with std_redirected("./handlers/" + snip.filesystem.easySlug(contentHandler) + ".txt"):
+        with std_redirected("./handlers/" + easySlug(contentHandler) + ".txt"):
             crawlApi(cdata)
 
         # Attachment handling
@@ -339,28 +340,7 @@ class Course():
 
         elif contentHandler == "resource/x-bb-forumlink":
             forum_id = cdata["contentHandler"].get("discussionId")
-            listview_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/forum?action=list_threads&course_id={self.id}&nav=discussion_board&conf_id=_266239_1&forum_id={forum_id}&forum_view=list"
-            (req, listview_soup) = self.cms.fetch(listview_url, soup=True)
-            table = listview_soup.find("table", id="listContainer_datatable")
-            if not table:
-                print("No table at url", listview_url)
-                return
-            for checkbox in table.findAll("input", type="checkbox", id=re.compile("[^(listContainer_selectAll)]")):
-                thread_id = f"_{checkbox.get('value')}_1"
-                tree_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/message?action=message_tree&course_id={self.id}&forum_id={forum_id}&message_id={thread_id}&nav=discussion_board&thread_id={thread_id}"
-                (req, threadtree_soup) = self.cms.fetch(tree_url, soup=True)
-                thread_name = False
-                for message_div in threadtree_soup.findAll("div", id=re.compile("^_[0-9]+_[0-9]")):
-                    message_id = message_div['id']
-                    subject = message_div.find(id=re.compile("subject_")).text
-                    author = message_div.find("span", class_="profileCardAvatarThumb").text.strip()
-                    message_name = snip.filesystem.easySlug(f"[{author}] {subject}")
-                    if not thread_name:
-                        thread_name = message_name
-                        os.makedirs(os.path.join(basepath, thread_name), exist_ok=True)
-                    message_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/message?action=message_frame&course_id={self.id}&forum_id={forum_id}&nav=db_thread_list&nav=discussion_board&message_id={message_id}"
-                    stream = self.cms.fetch(message_url)
-                    snip.net.saveStreamAs(stream, os.path.join(basepath, thread_name, message_name + ".html"))
+            await self.saveForum(basepath, forum_id)
 
         elif contentHandler == "resource/x-bb-externallink":
             url = cdata["contentHandler"].get("url")
@@ -417,6 +397,30 @@ class Course():
         else:
             progbar.write(f"Unknown content type {contentHandler}")
             json.dump(cdata, open(basepath + ".json", "w"))
+
+    async def saveForum(self, basepath, forum_id):
+        listview_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/forum?action=list_threads&course_id={self.id}&nav=discussion_board&conf_id=_266239_1&forum_id={forum_id}&forum_view=list"
+        (req, listview_soup) = self.cms.fetch(listview_url, soup=True)
+        table = listview_soup.find("table", id="listContainer_datatable")
+        if not table:
+            print("No table at url", listview_url)
+            return
+        for checkbox in table.findAll("input", type="checkbox", id=re.compile("[^(listContainer_selectAll)]")):
+            thread_id = f"_{checkbox.get('value')}_1"
+            tree_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/message?action=message_tree&course_id={self.id}&forum_id={forum_id}&message_id={thread_id}&nav=discussion_board&thread_id={thread_id}"
+            (req, threadtree_soup) = self.cms.fetch(tree_url, soup=True)
+            thread_name = False
+            for message_div in threadtree_soup.findAll("div", id=re.compile("^_[0-9]+_[0-9]")):
+                message_id = message_div['id']
+                subject = message_div.find(id=re.compile("subject_")).text
+                author = message_div.find("span", class_="profileCardAvatarThumb").text.strip()
+                message_name = easySlug(f"[{author}] {subject}")
+                if not thread_name:
+                    thread_name = message_name
+                    os.makedirs(os.path.join(basepath, thread_name), exist_ok=True)
+                message_url = f"https://elearning.utdallas.edu/webapps/discussionboard/do/message?action=message_frame&course_id={self.id}&forum_id={forum_id}&nav=db_thread_list&nav=discussion_board&message_id={message_id}"
+                stream = self.cms.fetch(message_url)
+                snip.net.saveStreamAs(stream, os.path.join(basepath, thread_name, message_name + ".html"))
 
     async def downloadAttachment(self, attachment, contentsid, parent):
         filename = attachment.get("fileName")
