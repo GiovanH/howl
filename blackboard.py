@@ -104,7 +104,7 @@ class Cms():
         return myCourses
 
     def saveAllClasses(self):
-        with tqdm.tqdm(self.allCourses(), unit="courses") as progbar:
+        with tqdm.tqdm(self.allCourses(), unit="course") as progbar:
             for course in progbar:
                 
                 progbar.set_description(course.name)
@@ -238,7 +238,7 @@ class Course():
     async def saveContents(self):
         self.history = []
         os.makedirs("./handlers/", exist_ok=True)
-        with tqdm.tqdm(total=0, unit="files") as progbar:
+        with tqdm.tqdm(total=0, unit="file") as progbar:
             for contents in self.cms.getApiResults(f"/learn/api/public/v1/courses/{self.id}/contents"):
                 await self._savecontents(contents['id'], self.rootdir, progbar)
 
