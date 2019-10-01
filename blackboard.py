@@ -9,6 +9,7 @@ import json
 from pprint import pprint
 import re
 from snip.data import crawlApi
+from codecs import encode, decode
 
 from snip.stream import std_redirected
 from snip import jfileutil
@@ -73,8 +74,9 @@ class Cms():
         results = []
         while url:
             m = self.fetch(url, soup=False).json()
-            if m.get("status") and m.get("status") >= 400:
-                return []
+            if m.get("status"):
+                if isinstance(m.get("status"), int) and m.get("status") >= 400:
+                    return []
             try:
                 results += m['results']
             except KeyError:
@@ -193,6 +195,17 @@ class Course():
 
         mergedGradeData = pd.merge(myGradesFrame, columnsFrame, left_on='columnId', right_on='id')
         mergedGradeData.to_csv(os.path.join(grades_rootdir, snip.filesystem.easySlug(self.name) + ".csv"), sep=',')
+
+        stream = self.cms.fetch(f"/webapps/bb-mygrades-BBLEARN/myGrades?course_id={self.id}&stream_name=mygrades").text
+        for jsmatch in re.findall("showInLightBox\((.+' +)\)", stream):
+            jsargs = re.sub("(' $)|(^ ')|(', ')", "\5", jsmatch).split("\5")
+            if len(jsargs) == 5:
+                __, aname, feedback, cmd, __ = jsargs
+                with open(f"{grades_rootdir}/{aname}_{cmd}.html", "w", encoding="utf-8") as fp:
+                    unescaped_feedback = decode(encode(feedback, 'latin-1', 'backslashreplace'), 'unicode-escape')
+                    fp.write(unescaped_feedback)
+            # else:
+            #     print(jsargs)
 
     async def saveAnnouncements(self):
 
